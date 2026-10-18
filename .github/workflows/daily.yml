@@ -1,0 +1,32 @@
+
+name: VistaFuture Daily Automation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 13 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get project files
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run VistaFuture script generator
+        run: python main.py
+
+      - name: Save generated script
+        uses: actions/upload-artifact@v4
+        with:
+          name: vistafuture-script
+          path: output/
+          if-no-files-found: error
