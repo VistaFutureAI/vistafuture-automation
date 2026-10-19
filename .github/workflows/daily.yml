@@ -1,5 +1,5 @@
 
-name: VistaFuture Daily Automation
+name: VistaFuture Video Automation
 
 on:
   workflow_dispatch:
@@ -10,32 +10,99 @@ permissions:
   contents: read
 
 jobs:
-  generate:
+  create-and-upload:
     runs-on: ubuntu-latest
     steps:
-      - name: Get project files
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
-      - name: Install Python packages
-        run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 
-      - name: Generate VistaFuture video
+      - name: Generate video
         run: python main.py
 
-      - name: Save video, audio and script
+      - name: Upload video to YouTube
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          from google.oauth2.credentials import Credentials
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaFileUpload
+
+          video_path = "output/vistafuture.mp4"
+
+          if not os.path.exists(video_path):
+              raise FileNotFoundError(
+                  f"Video tidak ditemukan: {video_path}"
+              )
+
+          credentials = Credentials(
+              token=None,
+              refresh_token=os.environ["YOUTUBE_REFRESH_TOKEN"],
+              token_uri="https://oauth2.googleapis.com/token",
+              client_id=os.environ["YOUTUBE_CLIENT_ID"],
+              client_secret=os.environ["YOUTUBE_CLIENT_SECRET"],
+              scopes=["https://www.googleapis.com/auth/youtube.upload"],
+          )
+
+          youtube = build(
+              "youtube", "v3",
+              credentials=credentials,
+              cache_discovery=False
+          )
+
+          from datetime import datetime, timezone
+          title = "VistaFuture | Discover the Future of AI"
+          description = (
+              "Explore the future of artificial intelligence, "
+              "technology, and innovation with VistaFuture.\n\n"
+              "#AI #FutureTechnology #VistaFuture"
+          )
+
+          body = {
+              "snippet": {
+                  "title": title,
+                  "description": description,
+                  "categoryId": "28"
+              },
+              "status": {
+                  "privacyStatus": "private",
+                  "selfDeclaredMadeForKids": False
+              }
+          }
+
+          media = MediaFileUpload(
+              video_path,
+              mimetype="video/mp4",
+              resumable=True
+          )
+
+          result = youtube.videos().insert(
+              part="snippet,status",
+              body=body,
+              media_body=media
+          ).execute()
+
+          print("Upload berhasil. Video ID:", result["id"])
+          print("Status: Private")
+          PY
+
+      - name: Save video artifact
         uses: actions/upload-artifact@v4
         with:
           name: vistafuture-video
-          path: output/
+          path: output/vistafuture.mp4
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
