@@ -266,13 +266,33 @@ async def main():
 
     audio_path = OUTPUT / "narration.mp3"
 
-    communicate = edge_tts.Communicate(
-        full_text,
-        VOICE,
-        rate="-5%"
-    )
+    
+    # Retry voice generation if the connection temporarily fails.
+    for attempt in range(3):
+        try:
+            communicate = edge_tts.Communicate(
+                full_text,
+                VOICE,
+                rate="-5%"
+            )
+            await communicate.save(str(audio_path))
 
-    await communicate.save(str(audio_path))
+            if audio_path.exists() and audio_path.stat().st_size > 0:
+                print("Narration audio created successfully.")
+                break
+
+            raise RuntimeError("The audio file is empty.")
+
+        except Exception as error:
+            print(f"Voice generation attempt {attempt + 1}/3 failed: {error}")
+
+            if attempt == 2:
+                raise RuntimeError(
+                    "Voice generation failed after 3 attempts. "
+                    "Check the internet connection or Edge TTS service."
+                ) from error
+
+            await asyncio.sleep(2)
 
     slides = []
 
