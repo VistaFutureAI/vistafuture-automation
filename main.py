@@ -1,5 +1,6 @@
 
 import asyncio
+import os
 import random
 import shutil
 import subprocess
@@ -8,6 +9,10 @@ from pathlib import Path
 
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont
+
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 CHANNEL = "VistaFuture"
 VOICE = "en-US-AndrewNeural"
@@ -21,6 +26,7 @@ TOPICS = [
     "Amazing Technologies That Could Change Our World",
     "How Science Is Shaping Tomorrow"
 ]
+
 
 def make_script(topic):
     sections = [
@@ -87,22 +93,24 @@ def make_script(topic):
     ]
     return topic, sections
 
+
 def get_font(size, bold=False):
-    paths = [
+    path = (
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
         if bold else
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    ]
-    for path in paths:
-        if Path(path).exists():
-            return ImageFont.truetype(path, size)
+    )
+
+    if Path(path).exists():
+        return ImageFont.truetype(path, size)
+
     return ImageFont.load_default()
+
 
 def make_slide(title, section, index):
     image = Image.new("RGB", (1280, 720), (10, 18, 42))
     draw = ImageDraw.Draw(image)
 
-    # Simple original abstract technology artwork
     for i in range(8):
         x = 850 + i * 42
         draw.ellipse(
@@ -112,59 +120,184 @@ def make_slide(title, section, index):
         )
 
     draw.rectangle((65, 90, 75, 625), fill=(45, 190, 220))
-    draw.text((110, 110), CHANNEL.upper(),
-              font=get_font(30, True), fill=(80, 220, 240))
+
+    draw.text(
+        (110, 110), CHANNEL.upper(),
+        font=get_font(30, True), fill=(80, 220, 240)
+    )
 
     y = 230
     for line in textwrap.wrap(title, width=27)[:3]:
-        draw.text((110, y), line,
-                  font=get_font(54, True), fill="white")
+        draw.text(
+            (110, y), line,
+            font=get_font(54, True), fill="white"
+        )
         y += 75
 
-    draw.text((110, 565), section,
-              font=get_font(27), fill=(160, 200, 225))
-    draw.text((110, 635), f"FUTURE • SCIENCE • TECHNOLOGY",
-              font=get_font(20), fill=(100, 170, 200))
+    draw.text(
+        (110, 565), section,
+        font=get_font(27), fill=(160, 200, 225)
+    )
+
+    draw.text(
+        (110, 635), "FUTURE • SCIENCE • TECHNOLOGY",
+        font=get_font(20), fill=(100, 170, 200)
+    )
 
     path = OUTPUT / f"slide_{index:02d}.png"
     image.save(path)
     return path
 
+
+def upload_to_youtube(video_path, topic):
+    client_id = os.environ.get("YOUTUBE_CLIENT_ID")
+    client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET")
+    refresh_token = os.environ.get("YOUTUBE_REFRESH_TOKEN")
+
+    if not all([client_id, client_secret, refresh_token]):
+        raise RuntimeError(
+            "YouTube credentials are missing. "
+            "Check the three GitHub Actions repository secrets."
+        )
+
+    credentials = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=["https://www.googleapis.com/auth/youtube.upload"]
+    )
+
+    youtube = build(
+        "youtube",
+        "v3",
+        credentials=credentials,
+        cache_discovery=False
+    )
+
+    title = f"{topic} | VistaFuture"
+
+    description = (
+        f"Explore {topic} with VistaFuture!\n\n"
+        "Discover science, emerging technology, artificial "
+        "intelligence, and ideas that could shape our future.\n\n"
+        "Subscribe to VistaFuture for more videos about tomorrow's world.\n\n"
+        "#FutureTechnology #Science #ArtificialIntelligence"
+    )
+
+    request_body = {
+        "snippet": {
+            "title": title[:100],
+            "description": description,
+            "tags": [
+                "future technology",
+                "science",
+                "future",
+                "artificial intelligence",
+                "technology",
+                "VistaFuture"
+            ],
+            "categoryId": "28"
+        },
+        "status": {
+            "privacyStatus": "private",
+            "selfDeclaredMadeForKids": False
+        }
+    }
+
+    media = MediaFileUpload(
+        str(video_path),
+        mimetype="video/mp4",
+        resumable=True
+    )
+
+    request = youtube.videos().insert(
+        part="snippet,status",
+        body=request_body,
+        media_body=media
+    )
+
+    print("Uploading video to YouTube...")
+
+    response = None
+
+    while response is None:
+        status, response = request.next_chunk()
+
+        if status:
+            print(
+                f"Upload progress: {int(status.progress() * 100)}%"
+            )
+
+    video_id = response.get("id")
+
+    if not video_id:
+        raise RuntimeError(
+            "YouTube did not return a video ID. Upload may have failed."
+        )
+
+    print("YouTube upload successful!")
+    print(f"Video ID: {video_id}")
+    print(f"Title: {title}")
+    print("Privacy: Private")
+    print(f"Video URL: https://www.youtube.com/watch?v={video_id}")
+
+
 async def main():
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
-        raise RuntimeError("FFmpeg and ffprobe must be installed.")
+        raise RuntimeError(
+            "FFmpeg and ffprobe must be installed."
+        )
 
     OUTPUT.mkdir(exist_ok=True)
+
     topic, sections = make_script(random.choice(TOPICS))
+
     full_text = "\n\n".join(
-        f"{heading}\n{text}" for heading, text in sections
+        f"{heading}\n{text}"
+        for heading, text in sections
     )
 
     (OUTPUT / "script.txt").write_text(
-        f"{topic}\n\n{full_text}", encoding="utf-8"
+        f"{topic}\n\n{full_text}",
+        encoding="utf-8"
     )
 
     audio_path = OUTPUT / "narration.mp3"
+
     communicate = edge_tts.Communicate(
-        full_text, VOICE, rate="-5%"
+        full_text,
+        VOICE,
+        rate="-5%"
     )
+
     await communicate.save(str(audio_path))
 
     slides = []
+
     for i, (heading, _) in enumerate(sections):
         slides.append(make_slide(topic, heading, i))
 
     probe = subprocess.run(
-        ["ffprobe", "-v", "error",
-         "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1",
-         str(audio_path)],
-        capture_output=True, text=True, check=True
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(audio_path)
+        ],
+        capture_output=True,
+        text=True,
+        check=True
     )
+
     audio_seconds = float(probe.stdout.strip())
 
-    # Allocate slide time according to each narration section.
-    word_counts = [len(text.split()) for _, text in sections]
+    word_counts = [
+        len(text.split())
+        for _, text in sections
+    ]
+
     total_words = sum(word_counts)
     concat_file = OUTPUT / "slides.txt"
 
@@ -172,27 +305,41 @@ async def main():
         for slide, count in zip(slides, word_counts):
             f.write(f"file '{slide.resolve()}'\n")
             f.write(
-                f"duration {audio_seconds * count / total_words:.3f}\n"
+                f"duration "
+                f"{audio_seconds * count / total_words:.3f}\n"
             )
+
         f.write(f"file '{slides[-1].resolve()}'\n")
 
     video_path = OUTPUT / "vistafuture.mp4"
-    subprocess.run([
-        "ffmpeg", "-y",
-        "-f", "concat", "-safe", "0",
-        "-i", str(concat_file),
-        "-i", str(audio_path),
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-vf", "scale=1280:720,format=yuv420p",
-        "-r", "24",
-        "-c:v", "libx264", "-preset", "veryfast",
-        "-c:a", "aac", "-b:a", "128k",
-        "-shortest", str(video_path)
-    ], check=True)
+
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", str(concat_file),
+            "-i", str(audio_path),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-vf", "scale=1280:720,format=yuv420p",
+            "-r", "24",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-shortest",
+            str(video_path)
+        ],
+        check=True
+    )
 
     print(f"Topic: {topic}")
     print(f"Video length: {audio_seconds / 60:.1f} minutes")
     print(f"Video saved: {video_path}")
+
+    # Upload only after video creation succeeds.
+    upload_to_youtube(video_path, topic)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
