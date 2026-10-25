@@ -1,5 +1,5 @@
 
-edge-tts
+edge-tts==7.2.3
 Pillow
 google-api-python-client
 google-auth
